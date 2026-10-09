@@ -1,0 +1,17 @@
+[project]
+name = "machia"
+version = "0.1.0"
+description = "An agent runtime for N-ATLAS."
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "colorama>=0.4.6",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/machia"]
