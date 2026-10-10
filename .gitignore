@@ -1,0 +1,132 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# ============================================================
+# Models — do NOT commit. 5+ GB each.
+# ============================================================
+models/
+*.gguf
+*.bin
+*.safetensors
+
+# ============================================================
+# Machia runtime state
+# ============================================================
+# Audit log, saved model path, llama-server log
+.machia/
+*.jsonl
+
+# ============================================================
+# Workspace (the sandbox the agent acts in)
+# ============================================================
+# If someone points --workspace inside the repo, don't commit
+# what the agent created there.
+workspace/
+machia-workspace/
+
+# But keep an empty placeholder so the folder structure is
+# visible in a fresh clone.
+!workspace/.gitkeep
+!machia-workspace/.gitkeep
+
+# ============================================================
+# Beta tester output
+# ============================================================
+machia-feedback-*.zip
+machia-feedback-*.tar.gz
+feedback-filled.md
+
+# ============================================================
+# Node / web
+# ============================================================
+node_modules/
+.next/
+out/
+dist-web/
+.npm
+.yarn
+.pnp.*
+*.tsbuildinfo
+
+# ============================================================
+# Environment and secrets
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# IDE / editor
+# ============================================================
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# ============================================================
+# Testing / coverage
+# ============================================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================
+# Jupyter
+# ============================================================
+.ipynb_checkpoints/
