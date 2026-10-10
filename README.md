@@ -1,8 +1,6 @@
 ﻿# Machia
 
-**An agent runtime for N-ATLAS.**
-
-Machia turns [N-ATLAS](https://huggingface.co/NCAIR1/N-ATLaS) from a chat model into a **local agent that acts on your PC**. You give it a task in English, Hausa, Igbo, Yoruba, or Nigerian Pidgin. It plans, calls tools on your filesystem, asks before doing anything risky, and **writes new skills for itself** so it gets better with use.
+**An agent runtime for N-ATLAS.**Machia turns [N-ATLAS](https://huggingface.co/NCAIR1/N-ATLaS) from a chat model into a **local agent that acts on your PC**. You give it a task in English, Hausa, Igbo, Yoruba, or Nigerian Pidgin. It plans, calls tools on your filesystem, asks before doing anything risky, and **writes new skills for itself** so it gets better with use.
 
 Everything runs locally. No API keys. No cloud. No extra model service in the loop.
 
@@ -20,13 +18,13 @@ Everything runs locally. No API keys. No cloud. No extra model service in the lo
 
 ## Requirements
 
-| Item | Requirement |
-| --- | --- |
-| **OS** | Windows 10/11, macOS, or Linux |
-| **Python** | 3.11 or newer |
-| **Disk** | ~6 GB (mostly the model) |
-| **RAM** | 8 GB minimum, 16 GB comfortable |
-| **GPU** | Not required |
+| Item       | Requirement                     |
+| ---------- | ------------------------------- |
+| **OS**     | Windows 10/11, macOS, or Linux  |
+| **Python** | 3.11 or newer                   |
+| **Disk**   | ~6 GB (mostly the model)        |
+| **RAM**    | 8 GB minimum, 16 GB comfortable |
+| **GPU**    | Not required                    |
 
 ---
 
@@ -35,7 +33,7 @@ Everything runs locally. No API keys. No cloud. No extra model service in the lo
 ### Windows (PowerShell)
 
 ```powershell
-git clone <repo-url> machia-agent
+git clone https://github.com/Mudath-thir-HM/machia-agent machia-agent
 cd machia-agent
 .\scripts\beta_pack\install.ps1
 ```
@@ -43,7 +41,7 @@ cd machia-agent
 ### macOS / Linux (bash)
 
 ```bash
-git clone <repo-url> machia-agent
+git clone https://github.com/Mudath-thir-HM/machia-agent machia-agent
 cd machia-agent
 chmod +x scripts/beta_pack/*.sh
 ./scripts/beta_pack/install.sh
@@ -84,24 +82,24 @@ machia > save what you just did as a skill called 'make-todo'
 
 ### Slash commands
 
-| Command | What it does |
-| --- | --- |
-| `/help` | Examples and command list |
-| `/skills` | List loaded skills |
-| `/mode` | Show the current safety mode |
-| `/clear` | Forget the conversation |
-| `/web` | Open the web UI in your browser |
-| `/exit` | Leave the REPL |
+| Command   | What it does                    |
+| --------- | ------------------------------- |
+| `/help`   | Examples and command list       |
+| `/skills` | List loaded skills              |
+| `/mode`   | Show the current safety mode    |
+| `/clear`  | Forget the conversation         |
+| `/web`    | Open the web UI in your browser |
+| `/exit`   | Leave the REPL                  |
 
 ### Safety model
 
 Every tool call passes through a safety policy before it runs:
 
-| Mode | Behaviour |
-| --- | --- |
-| `dry-run` | Plan only. No side effects. |
+| Mode      | Behaviour                                                   |
+| --------- | ----------------------------------------------------------- |
+| `dry-run` | Plan only. No side effects.                                 |
 | `confirm` | Default. Every medium/high-risk action asks `allow? [y/N]`. |
-| `auto` | Allowlisted tools run without prompting. |
+| `auto`    | Allowlisted tools run without prompting.                    |
 
 Every call is appended to `~/.machia/audit.jsonl` — a full trace you can inspect or submit as evidence.
 
@@ -271,3 +269,26 @@ When you're done, run `collect.ps1` (Windows) or `collect.sh` (macOS/Linux) to b
 ## License
 
 To be determined before submission.
+| Select-Object Name, Length
+Expected:
+
+text
+Name Length
+
+---
+
+README.md ~2500
+collect.ps1 ~3600
+collect.sh ~3000
+feedback.md ~2600
+install.ps1 ~6700
+install.sh ~5500
+tasks.md ~3700
+Also confirm the root README saved:
+
+powershell
+Get-Item README.md | Select-Object Name, Length
+
+```
+
+```
