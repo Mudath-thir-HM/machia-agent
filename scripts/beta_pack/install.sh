@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Machia beta installer for macOS and Linux.
 #
+# Steps:
+#   1. Check Python 3.11+
+#   2. Install the machia package (editable)
+#   3. Locate the N-ATLAS model file
+#   4. Seed the workspace with sample files
+#   5. Launch the unified launcher (model server + web UI + CLI)
+#
 # Usage:
 #   ./scripts/beta_pack/install.sh
 #   ./scripts/beta_pack/install.sh --workspace ~/my-workspace
-#
-# Requires: Python 3.11+, llama.cpp (llama-server), ~6 GB free disk.
+#   ./scripts/beta_pack/install.sh --no-web --no-spawn
 
 set -euo pipefail
 
@@ -21,18 +27,34 @@ info()    { printf "  ${C_DIM}.${C_RESET}   %s\n" "$1"; }
 
 # ---- Defaults -------------------------------------------------------------
 WORKSPACE="${HOME}/machia-workspace"
+MODE="confirm"
 SKIP_INSTALL=0
 SKIP_MODEL=0
-SKIP_SERVER=0
+NO_WEB=0
+NO_SPAWN=0
+MODEL_PATH=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workspace)    WORKSPACE="$2"; shift 2 ;;
+        --mode)         MODE="$2"; shift 2 ;;
+        --model)        MODEL_PATH="$2"; shift 2 ;;
         --skip-install) SKIP_INSTALL=1; shift ;;
         --skip-model)   SKIP_MODEL=1;   shift ;;
-        --skip-server)  SKIP_SERVER=1;  shift ;;
+        --no-web)       NO_WEB=1;       shift ;;
+        --no-spawn)     NO_SPAWN=1;     shift ;;
         -h|--help)
-            echo "Usage: $0 [--workspace PATH] [--skip-install] [--skip-model] [--skip-server]"
+            cat <<EOF
+Usage: $0 [options]
+
+  --workspace PATH   Where to run (default: ~/machia-workspace)
+  --mode MODE        dry-run | confirm | auto (default: confirm)
+  --model PATH       Path to ggml-model-Q4_K_M.gguf
+  --skip-install     Skip 'pip install -e .'
+  --skip-model       Skip model file search
+  --no-web           Do not start the web UI
+  --no-spawn         Do not auto-start llama-server
+EOF
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -82,32 +104,38 @@ else
 fi
 
 # ---- 3. Model check -------------------------------------------------------
-MODEL_PATH=""
+FOUND_MODEL=""
 if [[ "$SKIP_MODEL" -eq 0 ]]; then
     section "Checking model file"
-    for candidate in \
-        "${REPO_ROOT}/models/ggml-model-Q4_K_M.gguf" \
-        "${HOME}/models/ggml-model-Q4_K_M.gguf" \
-        "/opt/models/ggml-model-Q4_K_M.gguf"; do
+    CANDIDATES=(
+        "${REPO_ROOT}/models/ggml-model-Q4_K_M.gguf"
+        "${HOME}/models/ggml-model-Q4_K_M.gguf"
+        "/opt/models/ggml-model-Q4_K_M.gguf"
+        "C:/dev/models/ggml-model-Q4_K_M.gguf"
+    )
+    [[ -n "$MODEL_PATH" ]] && CANDIDATES=("$MODEL_PATH" "${CANDIDATES[@]}")
+    for candidate in "${CANDIDATES[@]}"; do
         if [[ -f "$candidate" ]]; then
-            MODEL_PATH="$candidate"
-            ok "Model: $candidate"
+            FOUND_MODEL="$candidate"
+            SIZE_GB=$(echo "scale=2; $(stat -c%s "$candidate" 2>/dev/null || stat -f%z "$candidate") / 1073741824" | bc 2>/dev/null || echo "?")
+            ok "Model: $candidate (${SIZE_GB} GB)"
             break
         fi
     done
-    if [[ -z "$MODEL_PATH" ]]; then
+    if [[ -z "$FOUND_MODEL" ]]; then
         warn "Model file not found."
-        echo "  Download it:"
+        echo "  Download it (about 5 GB):"
         echo "    pip install -U 'huggingface_hub[cli]'"
         echo "    hf download inuwamobarak/N-ATLaS-8B-GGUF-Q4_K_M \\"
         echo "       ggml-model-Q4_K_M.gguf --local-dir ~/models"
-        SKIP_SERVER=1
+        echo ""
+        warn "Continuing without a model path. The launcher will fail unless llama-server is already running."
     fi
 else
     section "Skipping model check"
 fi
 
-# ---- 4. Workspace ---------------------------------------------------------
+# ---- 4. Seed workspace ----------------------------------------------------
 section "Preparing workspace"
 if [[ ! -d "$WORKSPACE" ]]; then
     mkdir -p "$WORKSPACE"
@@ -124,54 +152,22 @@ fi
 
 mkdir -p "${HOME}/.machia"
 
-# ---- 5. Model server ------------------------------------------------------
-if [[ "$SKIP_SERVER" -eq 0 ]]; then
-    section "Model server"
-    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8080/health" 2>/dev/null | grep -q 200; then
-        ok "Server already running on http://127.0.0.1:8080"
-    else
-        LLAMA_SERVER="$(command -v llama-server || true)"
-        if [[ -z "$LLAMA_SERVER" ]]; then
-            err "llama-server not found."
-            echo "  Install llama.cpp:"
-            echo "    macOS:  brew install llama.cpp"
-            echo "    Other:  https://github.com/ggml-org/llama.cpp"
-            SKIP_SERVER=1
-        else
-            info "Starting server in background..."
-            NCPU=$( (nproc 2>/dev/null) || (sysctl -n hw.ncpu 2>/dev/null) || echo 8 )
-            nohup "$LLAMA_SERVER" \
-                -m "$MODEL_PATH" \
-                --host 127.0.0.1 --port 8080 \
-                -c 8192 --threads "$NCPU" \
-                --jinja --n-gpu-layers 0 \
-                > "${HOME}/.machia/llama-server.log" 2>&1 &
-            info "Waiting for server (up to 60s)..."
-            READY=0
-            for i in $(seq 1 60); do
-                if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8080/health" 2>/dev/null | grep -q 200; then
-                    ok "Server is up (${i}s)"
-                    READY=1
-                    break
-                fi
-                sleep 1
-            done
-            if [[ "$READY" -eq 0 ]]; then
-                warn "Server not responding after 60s. Check: ~/.machia/llama-server.log"
-            fi
-        fi
-    fi
-else
-    section "Skipping server launch"
-fi
-
-# ---- 6. Launch CLI --------------------------------------------------------
-section "Launching Machia CLI"
+# ---- 5. Launch the unified stack -----------------------------------------
+section "Launching Machia"
 printf "\n  workspace: %s\n" "$WORKSPACE"
-printf "  mode:      confirm\n\n"
+printf "  mode:      %s\n" "$MODE"
+if [[ "$NO_WEB" -eq 0 ]]; then
+    printf "  web UI:    http://127.0.0.1:5000\n"
+fi
+printf "\n"
 
-"$PYTHON" -m machia.cli --workspace "$WORKSPACE"
+LAUNCH_ARGS=(-m machia.launcher --workspace "$WORKSPACE" --mode "$MODE")
+[[ -n "$FOUND_MODEL" ]] && LAUNCH_ARGS+=(--model "$FOUND_MODEL")
+[[ "$NO_WEB"   -eq 1 ]] && LAUNCH_ARGS+=(--no-web)
+[[ "$NO_SPAWN" -eq 1 ]] && LAUNCH_ARGS+=(--no-spawn)
+
+"$PYTHON" "${LAUNCH_ARGS[@]}"
 
 section "Done"
-echo "  Run the tasks in tasks.md, then collect.sh"
+echo "  Session ended. Run the tasks in tasks.md, then collect.sh"
 echo
