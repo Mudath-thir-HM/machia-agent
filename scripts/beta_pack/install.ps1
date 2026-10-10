@@ -5,7 +5,7 @@
     Steps:
       1. Check Python 3.11+
       2. Install the machia package (editable)
-      3. Locate the N-ATLAS model file
+      3. Locate the best available N-ATLAS gguf
       4. Seed the workspace with sample files
       5. Launch the unified launcher (model server + web UI + CLI)
 
@@ -41,7 +41,61 @@ function Write-Err($text)  { Write-Host "  X   " -ForegroundColor Red    -NoNewl
 function Write-Info($text) { Write-Host "  .   " -ForegroundColor DarkGray -NoNewline; Write-Host $text }
 
 # ---------------------------------------------------------------------------
-# Locate repo root (this file lives at <root>/scripts/beta_pack/install.ps1)
+# Find the best N-ATLAS gguf available on this machine.
+# ---------------------------------------------------------------------------
+function Find-AtlasModel {
+    param([string[]]$SearchDirs)
+
+    # Preference order: best CPU trade-off first.
+    $preferred = @(
+        "q4_k_m", "q4_k_s",
+        "q5_k_m", "q5_k_s",
+        "q6_k",
+        "q8_0",
+        "q3_k_m", "q2_k"
+    )
+
+    $found = @()
+    foreach ($dir in $SearchDirs) {
+        if (-not (Test-Path $dir)) { continue }
+        try {
+            Get-ChildItem -Path $dir -Filter "*.gguf" -File -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $name = $_.Name.ToLower()
+                    if ($name -notmatch "atlas") { return }
+                    if ($_.Length -lt 2GB) { return }
+                    $found += $_
+                }
+        } catch { }
+    }
+
+    if ($found.Count -eq 0) { return $null }
+
+    $ranked = foreach ($f in $found) {
+        $name = $f.Name.ToLower()
+        $rank = $preferred.Count
+        for ($i = 0; $i -lt $preferred.Count; $i++) {
+            if ($name -match [regex]::Escape($preferred[$i])) { $rank = $i; break }
+        }
+        [PSCustomObject]@{ File = $f; Rank = $rank; Size = $f.Length }
+    }
+
+    $best = $ranked | Sort-Object Rank, Size | Select-Object -First 1
+    return $best.File.FullName
+}
+
+function Get-QuantLabel {
+    param([string]$path)
+    $name = (Split-Path $path -Leaf).ToLower()
+    if ($name -match "(q\d+_[a-z]_?[a-z]?)") { return $Matches[1].ToUpper() }
+    if ($name -match "(q\d+_\d)")          { return $Matches[1].ToUpper() }
+    if ($name -match "(q\d+_k)")           { return $Matches[1].ToUpper() }
+    if ($name -match "(q\d+)")             { return $Matches[1].ToUpper() }
+    return "?"
+}
+
+# ---------------------------------------------------------------------------
+# Locate repo root
 # ---------------------------------------------------------------------------
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -107,34 +161,47 @@ if (-not $SkipInstall) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Model check
+# 3. Model discovery
 # ---------------------------------------------------------------------------
 
 $foundModel = $null
 if (-not $SkipModelCheck) {
-    Write-Section "Checking model file"
+    Write-Section "Looking for an N-ATLAS model"
 
-    $candidates = @()
-    if ($ModelPath) { $candidates += $ModelPath }
-    $candidates += (Join-Path $RepoRoot "models\ggml-model-Q4_K_M.gguf")
-    $candidates += (Join-Path $RepoRoot "..\models\ggml-model-Q4_K_M.gguf")
-    $candidates += "C:\dev\models\ggml-model-Q4_K_M.gguf"
-    $candidates += "$env:USERPROFILE\models\ggml-model-Q4_K_M.gguf"
-
-    foreach ($c in $candidates) {
-        if (Test-Path $c) {
-            $foundModel = (Resolve-Path $c).Path
-            break
+    if ($ModelPath) {
+        if (Test-Path $ModelPath) {
+            $foundModel = (Resolve-Path $ModelPath).Path
+            Write-Info "Using explicit --ModelPath"
+        } else {
+            Write-Warn "Explicit --ModelPath not found: $ModelPath"
         }
+    }
+
+    if (-not $foundModel) {
+        $searchDirs = @(
+            (Join-Path $RepoRoot "models"),
+            (Join-Path $RepoRoot "..\models"),
+            "C:\dev\models",
+            (Join-Path $env:USERPROFILE "models"),
+            (Join-Path $env:USERPROFILE "Downloads")
+        )
+        $foundModel = Find-AtlasModel -SearchDirs $searchDirs
     }
 
     if ($foundModel) {
         $sizeGb = [math]::Round((Get-Item $foundModel).Length / 1GB, 2)
-        Write-Ok "Model: $foundModel ($sizeGb GB)"
+        $quant  = Get-QuantLabel $foundModel
+        Write-Ok "$foundModel"
+        Write-Ok "  quant: $quant   size: $sizeGb GB"
+
+        if ($sizeGb -gt 7) {
+            Write-Warn "This is a large quant. CPU inference will be noticeably slower."
+            Write-Warn "A Q4_K_M build (~4.9 GB) would run ~2x faster."
+        }
     } else {
-        Write-Warn "Model file not found in any of the usual locations."
+        Write-Warn "No N-ATLAS .gguf found in the usual locations."
         Write-Host ""
-        Write-Host "  Download it (about 5 GB):" -ForegroundColor Yellow
+        Write-Host "  Download one (about 5 GB):" -ForegroundColor Yellow
         Write-Host "    pip install -U `"huggingface_hub[cli]`"" -ForegroundColor White
         Write-Host "    hf download inuwamobarak/N-ATLaS-8B-GGUF-Q4_K_M ``" -ForegroundColor White
         Write-Host "       ggml-model-Q4_K_M.gguf --local-dir C:\dev\models" -ForegroundColor White
@@ -142,7 +209,7 @@ if (-not $SkipModelCheck) {
         Write-Host "  Then re-run:" -ForegroundColor Yellow
         Write-Host "    .\scripts\beta_pack\install.ps1 -ModelPath C:\dev\models\ggml-model-Q4_K_M.gguf" -ForegroundColor Yellow
         Write-Host ""
-        Write-Warn "Continuing without a model path. The launcher will fail unless llama-server is already running."
+        Write-Warn "Continuing. The launcher will fail unless llama-server is already running."
     }
 } else {
     Write-Section "Skipping model check"
@@ -168,7 +235,7 @@ if (-not (Test-Path $Workspace)) {
 }
 
 # ---------------------------------------------------------------------------
-# 5. Launch the unified stack (model + web + CLI)
+# 5. Launch the unified stack
 # ---------------------------------------------------------------------------
 
 Write-Section "Launching Machia"

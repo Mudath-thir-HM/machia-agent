@@ -4,14 +4,9 @@
 # Steps:
 #   1. Check Python 3.11+
 #   2. Install the machia package (editable)
-#   3. Locate the N-ATLAS model file
+#   3. Locate the best available N-ATLAS gguf
 #   4. Seed the workspace with sample files
 #   5. Launch the unified launcher (model server + web UI + CLI)
-#
-# Usage:
-#   ./scripts/beta_pack/install.sh
-#   ./scripts/beta_pack/install.sh --workspace ~/my-workspace
-#   ./scripts/beta_pack/install.sh --no-web --no-spawn
 
 set -euo pipefail
 
@@ -49,7 +44,7 @@ Usage: $0 [options]
 
   --workspace PATH   Where to run (default: ~/machia-workspace)
   --mode MODE        dry-run | confirm | auto (default: confirm)
-  --model PATH       Path to ggml-model-Q4_K_M.gguf
+  --model PATH       Explicit path to an N-ATLAS gguf
   --skip-install     Skip 'pip install -e .'
   --skip-model       Skip model file search
   --no-web           Do not start the web UI
@@ -103,33 +98,100 @@ else
     section "Skipping package install"
 fi
 
-# ---- 3. Model check -------------------------------------------------------
-FOUND_MODEL=""
-if [[ "$SKIP_MODEL" -eq 0 ]]; then
-    section "Checking model file"
-    CANDIDATES=(
-        "${REPO_ROOT}/models/ggml-model-Q4_K_M.gguf"
-        "${HOME}/models/ggml-model-Q4_K_M.gguf"
-        "/opt/models/ggml-model-Q4_K_M.gguf"
-        "C:/dev/models/ggml-model-Q4_K_M.gguf"
-    )
-    [[ -n "$MODEL_PATH" ]] && CANDIDATES=("$MODEL_PATH" "${CANDIDATES[@]}")
-    for candidate in "${CANDIDATES[@]}"; do
-        if [[ -f "$candidate" ]]; then
-            FOUND_MODEL="$candidate"
-            SIZE_GB=$(echo "scale=2; $(stat -c%s "$candidate" 2>/dev/null || stat -f%z "$candidate") / 1073741824" | bc 2>/dev/null || echo "?")
-            ok "Model: $candidate (${SIZE_GB} GB)"
-            break
+# ---- find_atlas_model: best available N-ATLAS gguf on this machine --------
+find_atlas_model() {
+    local search_dirs=("$@")
+    local preferred=("q4_k_m" "q4_k_s" "q5_k_m" "q5_k_s" "q6_k" "q8_0" "q3_k_m" "q2_k")
+    local found=()
+
+    local dir f name size
+    for dir in "${search_dirs[@]}"; do
+        [[ -d "$dir" ]] || continue
+        while IFS= read -r -d '' f; do
+            name=$(basename "$f" | tr '[:upper:]' '[:lower:]')
+            [[ "$name" == *"atlas"* ]] || continue
+            size=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
+            [[ "$size" -gt 2147483648 ]] || continue
+            found+=("$f")
+        done < <(find "$dir" -maxdepth 1 -type f -iname "*.gguf" -print0 2>/dev/null)
+    done
+
+    [[ ${#found[@]} -eq 0 ]] && return 1
+
+    local best="" best_rank=99 best_size=0
+    local i rank
+    for f in "${found[@]}"; do
+        name=$(basename "$f" | tr '[:upper:]' '[:lower:]')
+        rank=99
+        for i in "${!preferred[@]}"; do
+            if [[ "$name" == *"${preferred[$i]}"* ]]; then rank=$i; break; fi
+        done
+        size=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
+        if (( rank < best_rank )) || { (( rank == best_rank )) && (( size < best_size )); }; then
+            best="$f"; best_rank=$rank; best_size=$size
         fi
     done
+    echo "$best"
+}
+
+quant_label() {
+    local name
+    name=$(basename "$1" | tr '[:upper:]' '[:lower:]')
+    if [[ "$name" =~ (q[0-9]+_[a-z]_?[a-z]?) ]]; then
+        echo "${BASH_REMATCH[1]^^}"
+    elif [[ "$name" =~ (q[0-9]+_[0-9]) ]]; then
+        echo "${BASH_REMATCH[1]^^}"
+    elif [[ "$name" =~ (q[0-9]+_k) ]]; then
+        echo "${BASH_REMATCH[1]^^}"
+    elif [[ "$name" =~ (q[0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]^^}"
+    else
+        echo "?"
+    fi
+}
+
+# ---- 3. Model discovery ---------------------------------------------------
+FOUND_MODEL=""
+if [[ "$SKIP_MODEL" -eq 0 ]]; then
+    section "Looking for an N-ATLAS model"
+
+    if [[ -n "$MODEL_PATH" && -f "$MODEL_PATH" ]]; then
+        FOUND_MODEL="$MODEL_PATH"
+        info "Using explicit --model"
+    fi
+
     if [[ -z "$FOUND_MODEL" ]]; then
-        warn "Model file not found."
-        echo "  Download it (about 5 GB):"
+        SEARCH_DIRS=(
+            "${REPO_ROOT}/models"
+            "${REPO_ROOT}/../models"
+            "C:/dev/models"
+            "${HOME}/models"
+            "${HOME}/Downloads"
+        )
+        FOUND_MODEL=$(find_atlas_model "${SEARCH_DIRS[@]}" || true)
+    fi
+
+    if [[ -n "$FOUND_MODEL" ]]; then
+        SIZE_BYTES=$(stat -f%z "$FOUND_MODEL" 2>/dev/null || stat -c%s "$FOUND_MODEL")
+        SIZE_GB=$(awk -v b="$SIZE_BYTES" 'BEGIN { printf "%.2f", b / 1073741824 }')
+        QUANT=$(quant_label "$FOUND_MODEL")
+        ok "$FOUND_MODEL"
+        ok "  quant: $QUANT   size: $SIZE_GB GB"
+
+        # Warn on very large quants.
+        if awk -v s="$SIZE_GB" 'BEGIN { exit !(s > 7) }'; then
+            warn "This is a large quant. CPU inference will be noticeably slower."
+            warn "A Q4_K_M build (~4.9 GB) would run ~2x faster."
+        fi
+    else
+        warn "No N-ATLAS .gguf found in the usual locations."
+        echo ""
+        echo "  Download one (about 5 GB):"
         echo "    pip install -U 'huggingface_hub[cli]'"
         echo "    hf download inuwamobarak/N-ATLaS-8B-GGUF-Q4_K_M \\"
         echo "       ggml-model-Q4_K_M.gguf --local-dir ~/models"
         echo ""
-        warn "Continuing without a model path. The launcher will fail unless llama-server is already running."
+        warn "Continuing. The launcher will fail unless llama-server is already running."
     fi
 else
     section "Skipping model check"
