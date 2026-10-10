@@ -23,42 +23,96 @@ def _safe_path(user_path: str) -> Path:
     return p
 
 
-def fs_list(path: str = ".") -> dict:
-    """List the entries of a folder inside the workspace."""
+def _matches(name: str, pattern: str) -> bool:
+    """Match a filename against one or more comma-separated patterns.
+
+    Accepts both glob patterns ('*.png') and bare words ('image', 'pdf'),
+    which the model uses interchangeably. Matching is case-insensitive.
+    """
+    import fnmatch
+    name_lower = name.lower()
+    for raw in pattern.split(","):
+        p = raw.strip().lower()
+        if not p or p == "*":
+            return True
+        if fnmatch.fnmatch(name_lower, p):
+            return True
+        # Bare words (no wildcards) match as substrings — the model
+        # frequently says 'image' meaning 'any image extension'.
+        if "*" not in p and "?" not in p and p in name_lower:
+            return True
+    return False
+
+
+def fs_list(path: str = ".", pattern: str = "*") -> dict:
+    """List the entries of a folder inside the workspace.
+
+    `pattern` filters the results. Accepts a glob ('*.png'), a comma-
+    separated list ('*.png,*.jpg'), or a bare word ('pdf'). Default is
+    '*' meaning everything.
+    """
     target = _safe_path(path)
     if not target.exists():
         return {"error": f"Path does not exist: {path}"}
     if not target.is_dir():
         return {"error": f"Not a directory: {path}"}
+
     entries = []
     for child in sorted(target.iterdir()):
+        if not _matches(child.name, pattern):
+            continue
         entries.append({
             "name": child.name,
             "type": "dir" if child.is_dir() else "file",
             "size_bytes": child.stat().st_size if child.is_file() else None,
         })
+
     files = [e for e in entries if e["type"] == "file"]
-    dirs = [e for e in entries if e["type"] == "dir"]
+    dirs  = [e for e in entries if e["type"] == "dir"]
+    filter_note = (
+        f" (filtered by '{pattern}')" if pattern and pattern != "*" else ""
+    )
     return {
         "success": True,
         "path": str(target),
+        "pattern": pattern,
         "entries": entries,
-        "message": f"{len(entries)} entries: {len(files)} files, {len(dirs)} folders.",
+        "message": (
+            f"{len(entries)} entries{filter_note}: "
+            f"{len(files)} files, {len(dirs)} folders."
+        ),
     }
 
 FS_LIST = ToolSpec(
     name="fs_list",
-    description="List the files and folders inside a directory in the workspace.",
+    description=(
+        "List the files and folders inside a directory in the workspace. "
+        "Use `pattern` to filter by name or extension, e.g. '*.png' for "
+        "images, or '*.pdf,*.txt' for multiple types. Default lists all."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path relative to the workspace root. Use '.' for the root."},
+            "path": {
+                "type": "string",
+                "description": "Path relative to the workspace root. Use '.' for the root.",
+            },
+            "pattern": {
+                "type": "string",
+                "description": (
+                    "Optional. A glob ('*.png'), a comma-separated list "
+                    "('*.png,*.jpg'), or a bare word ('pdf'). Default '*'."
+                ),
+            },
         },
         "required": ["path"],
     },
     function=fs_list,
     risk="low",
-    aliases={"path": ("dir", "directory", "folder", "filepath", "file")},
+    aliases={
+        "path":    ("dir", "directory", "folder", "filepath", "file"),
+        "pattern": ("filter", "glob", "match", "extension", "ext", "type"),
+    },
 )
 
 def fs_read(path: str) -> dict:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 from pathlib import Path
+from contextlib import nullcontext
 
 from . import ui
 from .skills import load_skill_library, Skill
@@ -35,7 +36,11 @@ class Agent:
         self.on_tool_call = on_tool_call or (lambda name, args: None)
         self.on_tool_result = on_tool_result or (lambda name, result: None)
         self.messages: list[Message] = []
-
+        # Per-turn buffer of tool calls. Unlike self.messages, this is
+        # never trimmed, so the save-skill hint always sees what you
+        # actually just did.
+        self._turn_calls: list[tuple[str, str]] = []
+        
         self.skills: dict[str, Skill] = {}
         self.skills_dir: Path | None = None
         if skills_dir is not None:
@@ -55,6 +60,14 @@ class Agent:
     # -----------------------------------------------------------------
 
     def _recent_tool_calls(self, max_calls: int = 6) -> list[tuple[str, str]]:
+        """Return (name, raw_args) pairs from the CURRENT turn.
+
+        Reads from self._turn_calls, which is reset at the top of each
+        run() and never trimmed. Falls back to scanning self.messages if
+        the buffer is empty (e.g. immediately after a session restart).
+        """
+        if self._turn_calls:
+            return self._turn_calls[-max_calls:]
         calls: list[tuple[str, str]] = []
         for m in self.messages:
             if m.role == "assistant" and m.tool_calls:
@@ -231,6 +244,9 @@ class Agent:
             "8. If the user's message is conversational (a greeting, a question\n"
             "   about you, or a question you can answer without using any tool),\n"
             "   reply with plain text. No tool call.\n"
+            "9. If the conversation already contains data the user is asking\n"
+            "   about, answer the question from that data. Do NOT call a\n"
+            "   tool to fetch it again. Tool results persist across turns.\n"
         )
 
     # -----------------------------------------------------------------
@@ -238,6 +254,9 @@ class Agent:
     # -----------------------------------------------------------------
 
     def run(self, user_message: str, verbose: bool = True) -> str:
+        # Fresh buffer for this turn's tool calls.
+        self._turn_calls = []
+
         if self.messages and self.messages[0].role == "system":
             self.messages[0] = Message(role="system", content=self._system_prompt())
         else:
@@ -264,7 +283,8 @@ class Agent:
                     Message(role="user", content=hint_for_this_step)
                 )
 
-            with ui.thinking(f"step {step}"):
+            spinner_ctx = ui.thinking(f"step {step}") if verbose else nullcontext()
+            with spinner_ctx:
                 response = self.backend.chat(
                     messages=call_messages,
                     tools=self.registry.schemas(),
@@ -281,7 +301,43 @@ class Agent:
                     or '"parameters"' in text[:120]
                 )
 
+                                # The model produced no tool call. If the previous turn
+                # was a tool result, ask it once more — with tools
+                # disabled — to compose a real answer.
                 if messages and messages[-1].role == "tool":
+                    try:
+                        final_messages = list(messages) + [
+                            Message(
+                                role="user",
+                                content=(
+                                    f'The user\'s original question was: '
+                                    f'"{user_message}"\n\n'
+                                    "Answer that exact question in ONE "
+                                    "short sentence, using only the data in "
+                                    "the tool results above. Do NOT call any "
+                                    "tool. Quote filenames exactly."
+                                ),
+                            )
+                        ]
+                        with ui.thinking("composing answer"):
+                            final = self.backend.chat(
+                                messages=final_messages,
+                                tools=None,
+                                max_tokens=400,
+                            )
+                        with ui.thinking("composing answer"):
+                            final = self.backend.chat(
+                                messages=final_messages,
+                                tools=None,
+                                max_tokens=400,
+                            )
+                        composed = (final.content or "").strip()
+                        if composed:
+                            return composed
+                    except Exception:
+                        pass
+
+                    # Fallback: return the tool's own message.
                     try:
                         last = json.loads(messages[-1].content)
                         if isinstance(last, dict) and last.get("message"):
@@ -305,12 +361,49 @@ class Agent:
             fingerprint = f"{tool_name}:{args_raw}"
             call_counts[fingerprint] = call_counts.get(fingerprint, 0) + 1
             if call_counts[fingerprint] >= 2:
+                # The model is repeating a call it already made. If the
+                # first call succeeded, the data is already in the
+                # conversation. Instead of returning the tool's raw
+                # message (which is a summary, not an answer), make ONE
+                # final call to the model with tools disabled, asking it
+                # to answer the user's actual question using that data.
                 if fingerprint in successful_calls:
                     if verbose:
                         ui.console.print(
-                            f"[dim]  ✓ done — finishing on the model's behalf[/dim]"
+                            f"[dim]  ✓ duplicate call — asking the model to "
+                            f"answer from existing context[/dim]"
                         )
+                    try:
+                        final_messages = list(messages) + [
+                            Message(
+                                role="user",
+                                content=(
+                                    f'The user\'s original question was: '
+                                    f'"{user_message}"\n\n'
+                                    "STOP calling tools. The data you need "
+                                    "is already in the tool results above. "
+                                    "Answer that exact question in ONE short "
+                                    "sentence. Do NOT call any tool. If the "
+                                    "answer is a filename or a list, quote "
+                                    "the names exactly as they appear in the "
+                                    "tool result."
+                                ),
+                            )
+                        ]
+                        with ui.thinking("composing answer"):
+                            final = self.backend.chat(
+                                messages=final_messages,
+                                tools=None,
+                                max_tokens=400,
+                            )
+                        text = (final.content or "").strip()
+                        if text:
+                            return text
+                    except Exception:
+                        pass
+                    # Fallback if the synthesis call fails.
                     return successful_calls[fingerprint]
+
                 if verbose:
                     ui.console.print(
                         f"[yellow]  ✗ identical failing call repeated "
@@ -346,6 +439,8 @@ class Agent:
                     f"[white]({args})[/white]"
                 )
             self.on_tool_call(tool_name, args)
+            # Buffer for the save-skill hint. Not trimmed, ever.
+            self._turn_calls.append((tool_name, args_raw))
 
             # 5. Finish.
             if tool_name == "finish":
@@ -362,6 +457,8 @@ class Agent:
             # 7a. Policy lookup.
             spec = self.registry.get(tool_name)
             if spec is None:
+                # Skill called as if it were a tool. Check whether the
+                # user's message was conversational (no file-op verbs).
                 if tool_name in self.skills:
                     lower = user_message.lower()
                     conversational = not any(
@@ -385,21 +482,51 @@ class Agent:
                                 f"[yellow]  ! '{tool_name}' is a skill, but the "
                                 f"message is conversational — replying in text[/yellow]"
                             )
-                    else:
-                        error = {
-                            "error": f"'{tool_name}' is a SKILL, not a tool.",
-                            "fix": (
-                                f"Call the `load_skill` TOOL with name='{tool_name}'. "
-                                f"Then follow the procedure that comes back."
-                            ),
-                        }
-                        if verbose:
-                            ui.console.print(
-                                f"[yellow]  ! '{tool_name}' is a skill, not a tool "
-                                f"— nudging model to call load_skill[/yellow]"
-                            )
+                        messages.append(Message(
+                            role="tool",
+                            content=json.dumps(error),
+                            tool_call_id=call_id,
+                        ))
+                        continue
+
+                    # Non-conversational: the model is trying to USE the
+                    # skill but called the skill name instead of the
+                    # load_skill tool. TRANSLATE for it — run load_skill
+                    # on its behalf and feed the body back.
+                    if verbose:
+                        ui.console.print(
+                            f"[dim]  ↻ treating '{tool_name}' as load_skill[/dim]"
+                        )
+                    loader = self.registry.get("load_skill")
+                    if loader is not None:
+                        try:
+                            body = loader.function(name=tool_name)
+                        except Exception as e:
+                            body = {"error": f"{type(e).__name__}: {e}"}
+                        messages.append(Message(
+                            role="tool",
+                            content=json.dumps(body, default=str),
+                            tool_call_id=call_id,
+                        ))
+                        # Inject a nudge so the NEXT step follows the
+                        # procedure that was just loaded.
+                        hint_for_this_step = (
+                            f'The procedure for skill `{tool_name}` has been '
+                            f'loaded above. Now follow it step by step. '
+                            f'Do NOT call `{tool_name}` as a tool — it is a '
+                            f'skill, not a tool. Use the tools named inside '
+                            f'the procedure (e.g. `fs_write`, `fs_list`).'
+                        )
+                        continue
+                    # Fallback if load_skill isn't registered.
+                    error = {
+                        "error": f"'{tool_name}' is a SKILL, not a tool.",
+                        "fix": f"Call `load_skill` with name='{tool_name}'.",
+                    }
                     messages.append(Message(
-                        role="tool", content=json.dumps(error), tool_call_id=call_id,
+                        role="tool",
+                        content=json.dumps(error),
+                        tool_call_id=call_id,
                     ))
                     continue
 
@@ -443,6 +570,17 @@ class Agent:
                     ui.console.print(
                         f"[yellow]  ✗ blocked: {decision.reason}[/yellow]"
                     )
+                # Denial is TERMINAL. Do not let the model retry with
+                # slightly different arguments — a user who said "no"
+                # should not have to say "no" again.
+                if "user denied" in decision.reason.lower():
+                    return (
+                        f"Task aborted: you declined permission for the "
+                        f"'{tool_name}' action. Nothing was changed. "
+                        f"If you want to try a different approach, say so."
+                    )
+                # Other blocks (dry-run, not in allowlist) get a hint
+                # and the loop continues.
                 messages.append(Message(
                     role="tool",
                     content=json.dumps({
@@ -450,8 +588,7 @@ class Agent:
                         "reason": decision.reason,
                         "hint": (
                             "This tool call was blocked by the safety policy. "
-                            "If you need to accomplish this, consider an alternative "
-                            "tool or ask the user for permission."
+                            "Consider an alternative approach or call finish."
                         ),
                     }),
                     tool_call_id=call_id,
@@ -517,12 +654,17 @@ class Agent:
 
             if not was_problem:
                 hint_for_this_step = (
-                    f"You just successfully called `{tool_name}`. "
-                    f"What is the NEXT step?\n"
-                    f"- If the user's task is now complete, call `finish` "
-                    f"with the final answer.\n"
-                    f"- Otherwise, call the next required tool.\n"
-                    f"Do NOT repeat the same tool call."
+                    f'You just called `{tool_name}` and it succeeded.\n'
+                    f'\n'
+                    f'The user asked: "{user_message}"\n'
+                    f'\n'
+                    f'Read the tool result above and answer that question '
+                    f'NOW by calling `finish`. The finish message must '
+                    f'contain the actual answer (a filename, a count, a '
+                    f'list of names), NOT a description of what you did.\n'
+                    f'\n'
+                    f'Only call another tool if the answer genuinely '
+                    f'requires data you do not yet have.'
                 )
 
         return (
