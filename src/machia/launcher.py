@@ -8,7 +8,7 @@ or:
 
 Steps:
   1. Check whether llama-server is already running on 127.0.0.1:8080
-  2. If not, spawn it (using --model PATH or searching common locations)
+  2. If not, spawn it (using --model PATH, a saved path, or a scan)
   3. Start the FastAPI web UI in a background thread
   4. Run the CLI in the foreground
   5. On exit, terminate the model server if we spawned it
@@ -46,7 +46,7 @@ def _llama_alive(timeout: float = 1.0) -> bool:
 
 
 def _find_llama_server() -> Optional[str]:
-    """Search common locations for llama-server.exe."""
+    """Search common locations for llama-server(.exe)."""
     which = shutil.which("llama-server") or shutil.which("llama-server.exe")
     if which:
         return which
@@ -57,26 +57,103 @@ def _find_llama_server() -> Optional[str]:
     return None
 
 
-def _find_model() -> Optional[str]:
-    """Search common locations for the Q4_K_M gguf file."""
-    names = [
-        "ggml-model-Q4_K_M.gguf",
-        "N-ATLaS-8B-Q4_K_M.gguf",
-    ]
+# ---------------------------------------------------------------------------
+# Model discovery
+# ---------------------------------------------------------------------------
+
+# Quant preference order: best CPU trade-off first.
+_QUANT_PREFERENCE = [
+    "q4_k_m", "q4_k_s",
+    "q5_k_m", "q5_k_s",
+    "q6_k",
+    "q8_0",
+    "q3_k_m", "q2_k",
+]
+
+# Where we remember the chosen model between runs.
+_MODEL_CONFIG = Path.home() / ".machia" / "model.txt"
+
+
+def _save_model_path(path: str) -> None:
+    """Remember the chosen model so we don't re-discover it every run."""
+    _MODEL_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _MODEL_CONFIG.write_text(path, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_saved_model() -> Optional[str]:
+    """Return the previously-chosen model path, if it still exists."""
+    if not _MODEL_CONFIG.exists():
+        return None
+    try:
+        path = _MODEL_CONFIG.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if path and Path(path).exists():
+        return path
+    return None
+
+
+def _scan_for_model() -> Optional[str]:
+    """Scan common locations for the best available N-ATLAS gguf.
+
+    Considers any *.gguf whose name contains 'atlas' (case-insensitive)
+    and is at least 2 GB. Ranks by quant preference (Q4_K_M first),
+    then by size (smaller wins — loads faster on CPU).
+    """
     roots = [
         Path("C:/dev/models"),
         Path.home() / "models",
+        Path.home() / "Downloads",
         Path.cwd() / "models",
     ]
+    candidates: list[tuple[int, int, str]] = []
     for root in roots:
-        if not root.exists():
+        if not root.is_dir():
             continue
-        for name in names:
-            p = root / name
-            if p.exists():
-                return str(p)
-    return None
+        for path in root.glob("*.gguf"):
+            name = path.name.lower()
+            if "atlas" not in name:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size < 2 * 1024 ** 3:
+                continue
+            rank = len(_QUANT_PREFERENCE)
+            for i, q in enumerate(_QUANT_PREFERENCE):
+                if q in name:
+                    rank = i
+                    break
+            candidates.append((rank, size, str(path)))
 
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    return candidates[0][2]
+
+
+def _find_model() -> Optional[str]:
+    """Find an N-ATLAS model, in priority order:
+
+      1. The path saved from a previous run (~/.machia/model.txt)
+      2. A fresh scan of the usual locations
+    """
+    saved = _load_saved_model()
+    if saved:
+        return saved
+    found = _scan_for_model()
+    if found:
+        _save_model_path(found)
+    return found
+
+
+# ---------------------------------------------------------------------------
+# llama-server lifecycle
+# ---------------------------------------------------------------------------
 
 def _spawn_llama_server(model_path: str, log_path: Path) -> subprocess.Popen:
     exe = _find_llama_server()
@@ -126,13 +203,16 @@ def _wait_for_llama(timeout: int = 90) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Web UI (background thread)
+# ---------------------------------------------------------------------------
+
 def _start_web_server(workspace: str, mode: str, port: int) -> None:
     """Start the FastAPI app in a daemon thread.
 
     The daemon thread dies with the process, so no explicit shutdown
     is needed.
     """
-    # Populate _config before importing the app module.
     from machia.server import app as server_app
     server_app._config["workspace"] = str(Path(workspace).expanduser().resolve())
     server_app._config["mode"] = mode
@@ -156,9 +236,12 @@ def _start_web_server(workspace: str, mode: str, port: int) -> None:
             print(f"      !  web server failed: {e}")
 
     threading.Thread(target=run, daemon=True, name="machia-web").start()
-    # Give uvicorn a moment to bind the port.
     time.sleep(0.6)
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="machia")
@@ -191,11 +274,23 @@ def main() -> int:
         print("      X  not running, and --no-spawn was given. Aborting.")
         return 1
     else:
-        model = args.model or _find_model()
+        if args.model:
+            model = args.model
+        else:
+            model = _find_model()
+
         if not model:
             print("      X  model file not found.")
-            print("         Pass --model PATH, or place ggml-model-Q4_K_M.gguf in C:\\dev\\models.")
+            print("         Download one (about 5 GB):")
+            print("           pip install -U \"huggingface_hub[cli]\"")
+            print("           hf download inuwamobarak/N-ATLaS-8B-GGUF-Q4_K_M "
+                  "ggml-model-Q4_K_M.gguf --local-dir C:\\dev\\models")
+            print("         Or pass --model PATH.")
             return 1
+
+        # Remember the choice so future `machia` runs use the same file.
+        _save_model_path(model)
+
         log_path = Path.home() / ".machia" / "llama-server.log"
         spawned_proc = _spawn_llama_server(model, log_path)
         if not _wait_for_llama():
@@ -226,15 +321,17 @@ def main() -> int:
     print("  [3/3] CLI")
     print()
 
-    # Hand off to the CLI, which will print its own banner.
     from machia.cli import run_cli
 
-    # Show the web URL prominently before the CLI takes over.
     if not args.no_web:
         print(f"  Web UI:  {_web_url(args.port)}   (type /web to open)")
         print()
 
-    return run_cli(args.workspace, args.mode, web_url=(None if args.no_web else _web_url(args.port)))
+    return run_cli(
+        args.workspace,
+        args.mode,
+        web_url=(None if args.no_web else _web_url(args.port)),
+    )
 
 
 if __name__ == "__main__":
