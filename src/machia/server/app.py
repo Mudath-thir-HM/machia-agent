@@ -129,18 +129,26 @@ async def list_skills():
 
 @app.get("/api/audit")
 async def get_audit(limit: int = 30):
-    """Return the most recent audit entries."""
+    """Return the most recent tool_call events (one per user action)."""
     audit_path = Path("~/.machia/audit.jsonl").expanduser()
     if not audit_path.exists():
         return {"entries": []}
     lines = audit_path.read_text(encoding="utf-8").splitlines()
     entries = []
-    for line in lines[-limit:]:
+    # Read backwards so we get the most recent events first. We only
+    # return `tool_call` events — `tool_result` records are informational
+    # but doubling them up makes the sidebar unreadable.
+    for line in reversed(lines):
+        if len(entries) >= limit:
+            break
         try:
-            entries.append(json.loads(line))
+            entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-    return {"entries": list(reversed(entries))}
+        if entry.get("event") != "tool_call":
+            continue
+        entries.append(entry)
+    return {"entries": entries}
 
 
 @app.post("/api/chat")

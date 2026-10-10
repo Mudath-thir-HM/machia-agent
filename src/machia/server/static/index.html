@@ -879,12 +879,18 @@
             return;
           }
           data.entries.slice(0, 8).forEach((entry) => {
-            const ok = entry.allowed !== false && entry.ok !== false;
+            const allowed = entry.allowed !== false;
+            const colour = allowed ? "var(--emerald)" : "var(--amber)";
+            const status = allowed ? "ok" : "blocked";
             const d = document.createElement("div");
             d.className = "item activity";
+            d.title = entry.reason || "";
             d.innerHTML = `
-              <span class="dot" style="background:${ok ? "var(--emerald)" : "var(--amber)"}"></span>
-              <span class="label"><span class="tool">${entry.tool || "?"}</span> <span class="ok">${entry.event || ""}</span></span>
+              <span class="dot" style="background:${colour}"></span>
+              <span class="label">
+                <span class="tool">${entry.tool || "?"}</span>
+                <span style="color:${colour};opacity:0.7;"> · ${status}</span>
+              </span>
             `;
             container.appendChild(d);
           });

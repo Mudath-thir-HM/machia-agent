@@ -167,6 +167,21 @@ def hint_panel(text: str) -> Panel:
         padding=(1, 3),
     )
 
+def print_answer(text: str) -> None:
+    """Print the answer panel to the console."""
+    console.print(answer_panel(text))
+    console.print()
+
+
+def print_error(text: str) -> None:
+    """Print the error panel to the console."""
+    console.print(error_panel(text))
+    console.print()
+
+
+def print_separator() -> None:
+    """Print a faint horizontal rule."""
+    console.print(Rule(style=MUTED))
 
 # ---------------------------------------------------------------------------
 # Inference spinner

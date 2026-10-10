@@ -444,10 +444,47 @@ class Agent:
 
             # 5. Finish.
             if tool_name == "finish":
+                # Find any non-empty string argument the model passed.
+                answer_text = ""
                 for val in args.values():
                     if isinstance(val, str) and val.strip():
-                        return val.strip()
-                return "Done."
+                        answer_text = val.strip()
+                        break
+
+                if answer_text:
+                    return answer_text
+
+                # Empty finish — the model is stalling. Don't accept it.
+                # Tell the model it needs to actually answer, and give it
+                # one more step.
+                if verbose:
+                    ui.console.print(
+                        f"[yellow]  ✗ finish called with no message — "
+                        f"asking the model to try again[/yellow]"
+                    )
+                messages.append(Message(
+                    role="tool",
+                    content=json.dumps({
+                        "error": "finish was called without a message.",
+                        "hint": (
+                            "You must pass the actual answer to the user "
+                            "in the `message` argument. If you have not "
+                            "yet produced an answer, continue using tools."
+                        ),
+                    }),
+                    tool_call_id=call_id,
+                ))
+                hint_for_this_step = (
+                    f'You called `finish` without a message. That is not '
+                    f'allowed. The user asked: "{user_message}"\n'
+                    f'\n'
+                    f'If you already have the answer, call `finish` again '
+                    f'with `message` set to the actual text.\n'
+                    f'\n'
+                    f'If you do not have the answer yet, call the next '
+                    f'required tool instead of `finish`.'
+                )
+                continue
 
             # 6. Append assistant turn.
             messages.append(Message(
@@ -652,21 +689,42 @@ class Agent:
             ):
                 return str(result.get("message", "Skill created."))
 
+            # 7d. AUTO-ADVANCE NUDGE — after a successful result, tell the
+            # model what the NEXT step should be.
             if not was_problem:
-                hint_for_this_step = (
-                    f'You just called `{tool_name}` and it succeeded.\n'
-                    f'\n'
-                    f'The user asked: "{user_message}"\n'
-                    f'\n'
-                    f'Read the tool result above and answer that question '
-                    f'NOW by calling `finish`. The finish message must '
-                    f'contain the actual answer (a filename, a count, a '
-                    f'list of names), NOT a description of what you did.\n'
-                    f'\n'
-                    f'Only call another tool if the answer genuinely '
-                    f'requires data you do not yet have.'
-                )
-
+                if tool_name == "load_skill":
+                    # A skill body was just loaded. The task is NOT done —
+                    # the model must now execute the procedure step by step.
+                    hint_for_this_step = (
+                        f'You just loaded a SKILL procedure.\n'
+                        f'\n'
+                        f'The user asked: "{user_message}"\n'
+                        f'\n'
+                        f'The skill body above describes HOW to complete '
+                        f'that task. Read it carefully and execute it now.\n'
+                        f'\n'
+                        f'Do NOT call `finish` yet. Call the FIRST tool '
+                        f'named in the procedure (e.g. `fs_list`), then '
+                        f'continue with the remaining steps one at a time.\n'
+                        f'\n'
+                        f'Only call `finish` after every step of the '
+                        f'procedure has been executed and you have a '
+                        f'final summary for the user.'
+                    )
+                else:
+                    hint_for_this_step = (
+                        f'You just called `{tool_name}` and it succeeded.\n'
+                        f'\n'
+                        f'The user asked: "{user_message}"\n'
+                        f'\n'
+                        f'Read the tool result above and answer that question '
+                        f'NOW by calling `finish`. The finish message must '
+                        f'contain the actual answer (a filename, a count, a '
+                        f'list of names), NOT a description of what you did.\n'
+                        f'\n'
+                        f'Only call another tool if the answer genuinely '
+                        f'requires data you do not yet have.'
+                    )
         return (
             f"Stopped after {self.max_steps} steps without finishing. "
             "The task may be too complex for a single run. Try breaking it "
