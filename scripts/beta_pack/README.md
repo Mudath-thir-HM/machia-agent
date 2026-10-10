@@ -23,6 +23,15 @@ Open PowerShell in the `machia-agent` folder and run:
 .\scripts\beta_pack\install.ps1
 ```
 
+## macOS / Linux (bash)
+
+Open a terminal in the machia-agent folder and run:
+
+```
+chmod +x scripts/beta_pack/*.sh
+./scripts/beta_pack/install.sh
+```
+
 The script will:
 
 1. Check that you have Python 3.11+
