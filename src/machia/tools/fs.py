@@ -51,6 +51,14 @@ def fs_list(path: str = ".", pattern: str = "*") -> dict:
     separated list ('*.png,*.jpg'), or a bare word ('pdf'). Default is
     '*' meaning everything.
     """
+    # Models sometimes put a glob pattern in `path` instead of
+    # `pattern` (e.g. path='*.jpg'). If `path` looks like a glob,
+    # reinterpret: use '.' as the directory and move the glob to
+    # `pattern`. This is harmless when the model calls it correctly.
+    if "*" in path or "?" in path:
+        if pattern == "*":
+            pattern = path
+        path = "."
     target = _safe_path(path)
     if not target.exists():
         return {"error": f"Path does not exist: {path}"}

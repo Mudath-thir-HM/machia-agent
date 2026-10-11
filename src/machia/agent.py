@@ -632,7 +632,10 @@ class Agent:
                 ))
                 continue
 
-            # 7b. Run the tool.
+            
+            # ---------------------------------------------------------
+            # 7b. Policy allowed it. Run the tool.
+            # ---------------------------------------------------------
             result = None
             try:
                 result = self.registry.run(tool_name, args)
@@ -688,6 +691,33 @@ class Agent:
                 and "created" in result
             ):
                 return str(result.get("message", "Skill created."))
+
+            # ---------------------------------------------------------
+            # 7c-3. If create_skill failed validation, nudge the model to
+            # retry with the SAME fields.
+            # ---------------------------------------------------------
+            if (
+                tool_name == "create_skill"
+                and was_problem
+                and isinstance(result, dict)
+                and "received" in result
+            ):
+                rec = result["received"]
+                hint_for_this_step = (
+                    f"The create_skill call was rejected: "
+                    f"{result.get('error', 'unknown error')}\n"
+                    f"\n"
+                    f"Call create_skill AGAIN immediately with the SAME "
+                    f"fields. Only change what the error requires.\n"
+                    f"\n"
+                    f"  name:         {rec.get('name', '?')!r}\n"
+                    f"  description:  {rec.get('description', '?')!r}\n"
+                    f"  when_to_use:  {rec.get('when_to_use', '?')!r}\n"
+                    f"  tools:        {rec.get('tools', [])!r}\n"
+                    f"  body:         a numbered markdown procedure\n"
+                    f"\n"
+                    f"Do NOT send an empty object. Include every field."
+                )
 
             # 7d. AUTO-ADVANCE NUDGE — after a successful result, tell the
             # model what the NEXT step should be.

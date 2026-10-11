@@ -21,7 +21,20 @@ err()     { printf "  ${C_RED}X${C_RESET}   %s\n" "$1"; }
 info()    { printf "  ${C_DIM}.${C_RESET}   %s\n" "$1"; }
 
 # ---- Defaults -------------------------------------------------------------
-WORKSPACE="${HOME}/machia-workspace"
+# ---- Defaults -------------------------------------------------------------
+# Pick the first existing machia-workspace we can find. Fall back to
+# the user profile if none exists.
+WORKSPACE=""
+for candidate in \
+    "${HOME}/dev/machia-workspace" \
+    "${HOME}/machia-workspace" \
+    "${HOME}/Desktop/machia-workspace"; do
+    if [[ -d "$candidate" ]]; then
+        WORKSPACE="$candidate"
+        break
+    fi
+done
+[[ -z "$WORKSPACE" ]] && WORKSPACE="${HOME}/machia-workspace"
 MODE="confirm"
 SKIP_INSTALL=0
 SKIP_MODEL=0

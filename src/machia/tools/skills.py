@@ -230,7 +230,24 @@ def make_create_skill_tool(
                 known_tools=known_tools,
             )
         except SkillValidationError as e:
-            return {"error": str(e)}
+            # Echo back the received fields so the model doesn't lose
+            # them on retry. Without this, small models send `{}` next
+            # time, wasting a whole step.
+            return {
+                "error": str(e),
+                "received": {
+                    "name": str(name),
+                    "description": str(description),
+                    "when_to_use": str(when_to_use or description),
+                    "body": str(body),
+                    "tools": list(tools),
+                },
+                "hint": (
+                    "The call was rejected. Fix the problem described in "
+                    "'error' and call create_skill AGAIN with all the same "
+                    "fields from 'received', plus the fix."
+                ),
+            }
 
         if on_created is not None:
             try:

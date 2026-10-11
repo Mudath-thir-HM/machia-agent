@@ -17,8 +17,9 @@
 #>
 
 [CmdletBinding()]
+[CmdletBinding()]
 param(
-    [string]$Workspace = "$env:USERPROFILE\machia-workspace",
+    [string]$Workspace = "",
     [string]$ModelPath = "",
     [ValidateSet("dry-run", "confirm", "auto")]
     [string]$Mode = "confirm",
@@ -27,6 +28,25 @@ param(
     [switch]$NoWeb,
     [switch]$NoSpawn
 )
+
+# If the caller did not pass -Workspace, pick the first existing
+# machia-workspace we can find. Otherwise fall back to the user profile.
+if (-not $Workspace) {
+    $candidates = @(
+        "C:\dev\machia-workspace",
+        "$env:USERPROFILE\machia-workspace",
+        "$env:USERPROFILE\Desktop\machia-workspace"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) {
+            $Workspace = $c
+            break
+        }
+    }
+    if (-not $Workspace) {
+        $Workspace = "$env:USERPROFILE\machia-workspace"
+    }
+}
 
 $ErrorActionPreference = "Stop"
 

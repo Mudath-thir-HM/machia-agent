@@ -15,8 +15,9 @@ _TOOL_IN_BODY_RE = re.compile(r"`([a-z][a-z0-9_]+)`")
 
 # Skill names must be slugs. This prevents path traversal, absolute
 # paths, Windows reserved names, and anything that isn't a clean folder.
-_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
-
+# We accept both dashes and underscores — small models produce snake_case
+# by default, and forcing dashes causes needless validation failures.
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,40}$")
 # A body over this size is refused. 4 KB is generous — our own
 # organize-by-type skill is ~1 KB.
 MAX_BODY_BYTES = 4096
@@ -33,7 +34,8 @@ def validate_name(name: str) -> str:
     if not isinstance(name, str) or not _NAME_RE.match(name):
         raise SkillValidationError(
             f"Invalid skill name: {name!r}. "
-            "Use lowercase letters, digits and dashes (e.g. 'sort-by-type')."
+            "Use lowercase letters, digits, dashes or underscores "
+            "(e.g. 'sort-by-type' or 'sort_by_type')."
         )
     return name
 
