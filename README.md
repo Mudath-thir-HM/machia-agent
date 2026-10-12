@@ -1,6 +1,16 @@
 ﻿# Machia
 
-**An agent runtime for N-ATLAS.**Machia turns [N-ATLAS](https://huggingface.co/NCAIR1/N-ATLaS) from a chat model into a **local agent that acts on your PC**. You give it a task in English, Hausa, Igbo, Yoruba, or Nigerian Pidgin. It plans, calls tools on your filesystem, asks before doing anything risky, and **writes new skills for itself** so it gets better with use.
+**An agent runtime for N-ATLAS.**
+
+## 🎥 Watch: how Machia works
+
+[![Watch the demo — how Machia works](https://img.youtube.com/vi/24Lcs93bw3Q/maxresdefault.jpg)](https://youtu.be/24Lcs93bw3Q)
+
+▶️ **[Watch the full walkthrough on YouTube](https://youtu.be/24Lcs93bw3Q)**
+
+---
+
+Machia turns [N-ATLAS](https://huggingface.co/NCAIR1/N-ATLaS) from a chat model into a **local agent that acts on your PC**. You give it a task in English, Hausa, Igbo, Yoruba, or Nigerian Pidgin. It plans, calls tools on your filesystem, asks before doing anything risky, and **writes new skills for itself** so it gets better with use.
 
 Everything runs locally. No API keys. No cloud. No extra model service in the loop.
 
